@@ -1,49 +1,43 @@
-import os
-import boto3
 import json
-
-s3 = boto3.client('s3')
-sns = boto3.client('sns')
-
-topic_arn = os.environ['SNS_TOPIC_ARN']
+import boto3
+import os
 
 def lambda_handler(event, context):
-    for record in event['Records']:
+    # 1. Extract bucket + key from S3 event
+    try:
+        record = event['Records'][0]
         bucket = record['s3']['bucket']['name']
         key = record['s3']['object']['key']
+    except Exception as e:
+        print(f"Malformed event: {e}")
+        return {"statusCode": 400, "body": "Malformed event"}
 
+    # 2. Read file from S3
+    s3 = boto3.client('s3')
+    try:
         obj = s3.get_object(Bucket=bucket, Key=key)
-        raw = obj['Body'].read()
+        file_content = obj['Body'].read().decode('utf-8')
+        json_data = json.loads(file_content)
+    except Exception as e:
+        print(f"Error reading or decoding file: {e}")
+        return {"statusCode": 400, "body": "Invalid file content"}
 
-        try:
-            content = raw.decode('utf-8-sig')
-        except UnicodeDecodeError:
-            print("⚠️ UTF-8 decoding failed, trying fallback...")
-            content = raw.decode('utf-16')
+    # 3. Validate required fields
+    required = ['name', 'status', 'timestamp']
+    missing = [f for f in required if f not in json_data]
+    if missing:
+        print(f"Missing required fields: {missing}")
+        return {"statusCode": 422, "body": f"Missing fields: {', '.join(missing)}"}
 
-        print("✅ Decoded content:")
-        print(content)
+    # 4. Publish to SNS
+    sns = boto3.client('sns')
+    topic_arn = os.environ['SNS_TOPIC_ARN']
+    message = f"{json_data['name']} submitted status '{json_data['status']}' at {json_data['timestamp']}"
 
-        try:
-            data = json.loads(content)
-        except Exception as e:
-            print(f"❌ Error parsing JSON: {e}")
-            return {"statusCode": 400, "body": "Invalid JSON"}
+    try:
+        sns.publish(TopicArn=topic_arn, Message=message, Subject="JSON Upload Processed")
+    except Exception as e:
+        print(f"Failed to publish to SNS: {e}")
+        return {"statusCode": 500, "body": "SNS publish failed"}
 
-        print(f"🔍 Parsed JSON:\n{json.dumps(data, indent=2)}")
-
-        message = f"📂 File: {key}\n📦 Content:\n{json.dumps(data, indent=2)}"
-
-        if data.get('status') == 'approved':
-            url = s3.generate_presigned_url('get_object', Params={'Bucket': bucket, 'Key': key}, ExpiresIn=600)
-            message += f"\n🔗 Download link: {url}"
-
-        sns.publish(
-            TopicArn=topic_arn,
-            Subject='New JSON Upload',
-            Message=message
-        )
-
-        print("✅ SNS notification sent!")
-
-        return {"statusCode": 200, "body": "Processed"}
+    return {"statusCode": 200, "body": "Success"}
