@@ -55,7 +55,16 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "sns:Publish"
         ],
         Resource = "arn:aws:sns:us-east-1:360300555134:file-upload-notification"
-      }
+      },
+	  {
+		  "Effect": "Allow",
+		  "Action": [
+			"dynamodb:PutItem", "dynamodb:Scan"
+		  ],
+		  "Resource": "arn:aws:dynamodb:*:*:table/trade_logs"
+		}
+
     ]
   })
 }
+
